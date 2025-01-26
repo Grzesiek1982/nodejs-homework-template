@@ -13,6 +13,7 @@ connection
     app.listen(MAIN_PORT, function () {
       console.log("Database connection successful");
       console.log(`Server is running on http://localhost:${MAIN_PORT}`);
+      console.log(process.env.DB_URL);
     });
   })
   .catch((err) => {
