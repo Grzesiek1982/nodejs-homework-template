@@ -2,6 +2,11 @@ const User = require("../service/schemas/user");
 const Joi = require("joi");
 const passport = require("passport");
 const jwt = require("jsonwebtoken");
+const gravatar = require("gravatar");
+const multer = require("multer");
+const path = require("path");
+const jimp = require("jimp");
+const fs = require("fs");
 
 const schema = Joi.object({
   password: Joi.string().required(),
@@ -17,6 +22,29 @@ const schema = Joi.object({
   token: Joi.string().default(null),
 });
 
+// Multer storage configuration for avatar
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "tmp/"); // Files are uploaded to 'tmp' folder
+  },
+  filename: (req, file, cb) => {
+    cb(null, `${Date.now()}-${file.originalname}`); // Unique file name
+  },
+});
+
+const upload = multer({
+  storage: storage,
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ext === ".jpg" || ext === ".jpeg" || ext === ".png") {
+      cb(null, true);
+    } else {
+      cb(new Error("Only .jpg, .jpeg, and .png files are allowed"), false);
+    }
+  },
+}).single("avatar"); // The field name will be 'avatar'
+
+// Authentication middleware
 const auth = (req, res, next) => {
   passport.authenticate("jwt", { session: false }, (err, user) => {
     if (!user || err) {
@@ -32,6 +60,7 @@ const auth = (req, res, next) => {
   })(req, res, next);
 };
 
+// Register user
 const register = async (req, res, next) => {
   const { error } = schema.validate(req.body);
   const user = await User.findOne({ email: req.body.email });
@@ -55,9 +84,16 @@ const register = async (req, res, next) => {
   }
 
   try {
+    const avatarURL = gravatar.url(req.body.email, {
+      s: "250",
+      r: "pg",
+      d: "mm",
+    });
+
     const newUser = new User({
       email: req.body.email,
       subscription: "starter",
+      avatarURL,
     });
     await newUser.setPassword(req.body.password);
     await newUser.save();
@@ -69,6 +105,7 @@ const register = async (req, res, next) => {
         user: {
           email: req.body.email,
           subscription: "starter",
+          avatarURL: avatarURL,
         },
       },
     });
@@ -77,6 +114,66 @@ const register = async (req, res, next) => {
   }
 };
 
+// Update avatar
+const updateAvatar = async (req, res, next) => {
+  upload(req, res, async (err) => {
+    if (err) {
+      return res.status(400).json({
+        status: "400 Bad Request",
+        contentType: "application/json",
+        responseBody: { message: err.message },
+      });
+    }
+
+    try {
+      const userId = req.user._id;
+      const user = await User.findById(userId);
+
+      if (!user) {
+        return res.status(404).json({
+          status: "404 Not Found",
+          responseBody: { message: "User not found" },
+        });
+      }
+
+      // Process image with Jimp (resize to 250x250)
+      const avatarPath = req.file.path;
+      const image = await jimp.read(avatarPath);
+      await image.resize(250, 250); // Resize to 250x250
+      const uniqueFilename = `${userId}-${Date.now()}${path.extname(
+        req.file.originalname
+      )}`;
+      const finalPath = path.join(
+        __dirname,
+        "../public/avatars",
+        uniqueFilename
+      );
+
+      // Save the resized image
+      await image.writeAsync(finalPath);
+
+      // Delete the temporary file from 'tmp' folder
+      fs.unlinkSync(avatarPath);
+
+      // Update user document with the new avatar URL
+      user.avatarURL = `/avatars/${uniqueFilename}`;
+      await user.save();
+
+      return res.status(200).json({
+        status: "200 OK",
+        contentType: "application/json",
+        responseBody: {
+          message: "Avatar updated successfully",
+          avatarURL: user.avatarURL,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+};
+
+// Login user
 const login = async (req, res, next) => {
   const { error } = schema.validate(req.body);
 
@@ -137,6 +234,7 @@ const login = async (req, res, next) => {
   }
 };
 
+// Logout user
 const logout = async (req, res, next) => {
   try {
     const userId = req.user._id;
@@ -151,6 +249,7 @@ const logout = async (req, res, next) => {
   }
 };
 
+// Get current user data
 const current = async (req, res, next) => {
   try {
     const userId = req.user._id;
@@ -172,6 +271,7 @@ const current = async (req, res, next) => {
       responseBody: {
         email: req.user.email,
         subscription: req.user.subscription,
+        avatarURL: req.user.avatarURL, // Include avatar URL in response
       },
     });
   } catch (err) {
@@ -229,4 +329,5 @@ module.exports = {
   auth,
   current,
   updateSub,
+  updateAvatar, // Expose the new method
 };
