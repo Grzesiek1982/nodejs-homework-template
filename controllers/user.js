@@ -136,10 +136,10 @@ const updateAvatar = async (req, res, next) => {
         });
       }
 
-      // Process image with Jimp (resize to 250x250)
+      // Przetwarzanie obrazu w Jimp (zmiana rozmiaru do 250x250)
       const avatarPath = req.file.path;
       const image = await jimp.read(avatarPath);
-      await image.resize(250, 250); // Resize to 250x250
+      await image.resize(250, 250); // Skalowanie do 250x250
       const uniqueFilename = `${userId}-${Date.now()}${path.extname(
         req.file.originalname
       )}`;
@@ -149,13 +149,16 @@ const updateAvatar = async (req, res, next) => {
         uniqueFilename
       );
 
-      // Save the resized image
+      // Zapisz przetworzony obraz
       await image.writeAsync(finalPath);
 
-      // Delete the temporary file from 'tmp' folder
-      fs.unlinkSync(avatarPath);
+      // Usuń plik tymczasowy
+      await fs.promises.unlink(avatarPath);
 
-      // Update user document with the new avatar URL
+      // Wyczyść cały folder tmp
+      await cleanTmpFolder();
+
+      // Zaktualizuj ścieżkę avatara w bazie danych
       user.avatarURL = `/avatars/${uniqueFilename}`;
       await user.save();
 
@@ -172,6 +175,22 @@ const updateAvatar = async (req, res, next) => {
     }
   });
 };
+
+// Czyszczenie katalogu
+async function cleanTmpFolder() {
+  const tmpDir = path.join(__dirname, "../tmp");
+  try {
+    const files = await fs.promises.readdir(tmpDir);
+    for (const file of files) {
+      const filePath = path.join(tmpDir, file);
+      await fs.promises.unlink(filePath); // Usuń plik
+      console.log(`Usunięto: ${filePath}`);
+    }
+    console.log("Folder tmp wyczyszczony.");
+  } catch (error) {
+    console.error("Błąd podczas czyszczenia tmp:", error);
+  }
+}
 
 // Login user
 const login = async (req, res, next) => {
