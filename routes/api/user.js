@@ -12,4 +12,7 @@ router.patch("/", ctrlUser.updateSub);
 // Trasa do aktualizacji awatara
 router.patch("/avatars", ctrlUser.auth, ctrlUser.updateAvatar); // Dodanie trasy do aktualizacji awatara
 
+// Trasa do weryfikacji emaila
+router.get("/verify/:verificationToken", ctrlUser.verifyEmail);
+
 module.exports = router;

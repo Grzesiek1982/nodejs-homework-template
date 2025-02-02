@@ -22,12 +22,22 @@ const userSchema = new Schema({
     type: String,
     default: null,
   },
+  verify: {
+    type: Boolean,
+    default: false, // Domyślnie użytkownik nie jest zweryfikowany
+  },
+  verificationToken: {
+    type: String,
+    required: [true, "Verify token is required"], // Pole wymagane
+  },
 });
 
+// Funkcja do hashowania hasła
 userSchema.methods.setPassword = async function (password) {
   this.password = await bCrypt.hash(password, 10);
 };
 
+// Funkcja do sprawdzania poprawności hasła
 userSchema.methods.validatePassword = async function (password) {
   return await bCrypt.compare(password, this.password);
 };
