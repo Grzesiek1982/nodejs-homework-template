@@ -1,4 +1,4 @@
-const User = require("../service/schemas/user");
+const User = require("../service/schemas/user"); // Import modelu użytkownika
 const Joi = require("joi");
 const passport = require("passport");
 const jwt = require("jsonwebtoken");
@@ -7,6 +7,7 @@ const multer = require("multer");
 const path = require("path");
 const jimp = require("jimp");
 const fs = require("fs");
+const sgMail = require("@sendgrid/mail"); // Importujemy SendGrid
 
 const schema = Joi.object({
   password: Joi.string().required(),
@@ -95,22 +96,128 @@ const register = async (req, res, next) => {
       subscription: "starter",
       avatarURL,
     });
+
+    // Generowanie tokenu weryfikacyjnego
+    const verificationToken = jwt.sign(
+      { id: newUser._id },
+      process.env.VERIFY_SECRET,
+      { expiresIn: "24h" }
+    );
+    newUser.verificationToken = verificationToken;
+
     await newUser.setPassword(req.body.password);
     await newUser.save();
+
+    // Logika wysyłania e-maila z linkiem do weryfikacji
+    const verifyUrl = `${process.env.BASE_URL}/verify-email/${verificationToken}`;
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    const msg = {
+      to: req.body.email,
+      from: process.env.EMAIL_USER, // Użyj zweryfikowanego nadawcy w SendGrid
+      subject: "Email Verification",
+      html: `<p>Click the link to verify your email: <a href="${verifyUrl}">${verifyUrl}</a></p>`,
+    };
+
+    await sgMail.send(msg);
 
     res.status(201).json({
       status: "201 Created",
       contentType: "application/json",
       responseBody: {
-        user: {
-          email: req.body.email,
-          subscription: "starter",
-          avatarURL: avatarURL,
-        },
+        message:
+          "Registration successful. Please check your email to verify your account.",
       },
     });
   } catch (err) {
     next(err);
+  }
+};
+
+// Verify email
+const verifyEmail = async (req, res, next) => {
+  try {
+    const { verificationToken } = req.params;
+
+    // Szukamy użytkownika z podanym tokenem
+    const user = await User.findOne({ verificationToken });
+
+    if (!user) {
+      return res.status(404).json({
+        status: "404 Not Found",
+        responseBody: { message: "User not found or already verified" },
+      });
+    }
+
+    // Aktualizujemy użytkownika - usuwamy token i ustawiamy verify na true
+    user.verificationToken = null;
+    user.verify = true;
+    await user.save();
+
+    return res.status(200).json({
+      status: "200 OK",
+      responseBody: { message: "Verification successful" },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Resend verification email
+const resendVerificationEmail = async (req, res, next) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({
+      status: "400 Bad Request",
+      responseBody: { message: "Missing required field email" },
+    });
+  }
+
+  try {
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({
+        status: "404 Not Found",
+        responseBody: { message: "User not found" },
+      });
+    }
+
+    if (user.verify) {
+      return res.status(400).json({
+        status: "400 Bad Request",
+        responseBody: { message: "Verification has already been passed" },
+      });
+    }
+
+    // Generowanie nowego tokenu weryfikacyjnego
+    const verificationToken = jwt.sign(
+      { id: user._id },
+      process.env.VERIFY_SECRET,
+      { expiresIn: "24h" }
+    );
+    user.verificationToken = verificationToken;
+    await user.save();
+
+    // Wysyłanie e-maila z nowym tokenem weryfikacyjnym
+    const verifyUrl = `${process.env.BASE_URL}/verify-email/${verificationToken}`;
+    const msg = {
+      to: user.email,
+      from: process.env.EMAIL_USER,
+      subject: "Email Verification",
+      html: `<p>Click the link to verify your email: <a href="${verifyUrl}">${verifyUrl}</a></p>`,
+    };
+
+    await sgMail.send(msg);
+
+    res.status(200).json({
+      status: "200 OK",
+      responseBody: {
+        message: "Verification email sent successfully",
+      },
+    });
+  } catch (error) {
+    next(error);
   }
 };
 
@@ -136,10 +243,9 @@ const updateAvatar = async (req, res, next) => {
         });
       }
 
-      // Przetwarzanie obrazu w Jimp (zmiana rozmiaru do 250x250)
       const avatarPath = req.file.path;
       const image = await jimp.read(avatarPath);
-      await image.resize(250, 250); // Skalowanie do 250x250
+      await image.resize(250, 250);
       const uniqueFilename = `${userId}-${Date.now()}${path.extname(
         req.file.originalname
       )}`;
@@ -149,16 +255,11 @@ const updateAvatar = async (req, res, next) => {
         uniqueFilename
       );
 
-      // Zapisz przetworzony obraz
       await image.writeAsync(finalPath);
 
-      // Usuń plik tymczasowy
       await fs.promises.unlink(avatarPath);
-
-      // Wyczyść cały folder tmp
       await cleanTmpFolder();
 
-      // Zaktualizuj ścieżkę avatara w bazie danych
       user.avatarURL = `/avatars/${uniqueFilename}`;
       await user.save();
 
@@ -183,7 +284,7 @@ async function cleanTmpFolder() {
     const files = await fs.promises.readdir(tmpDir);
     for (const file of files) {
       const filePath = path.join(tmpDir, file);
-      await fs.promises.unlink(filePath); // Usuń plik
+      await fs.promises.unlink(filePath);
       console.log(`Usunięto: ${filePath}`);
     }
     console.log("Folder tmp wyczyszczony.");
@@ -348,5 +449,7 @@ module.exports = {
   auth,
   current,
   updateSub,
-  updateAvatar, // Expose the new method
+  updateAvatar,
+  verifyEmail,
+  resendVerificationEmail, // Dodano metodę wysyłania ponownego e-maila
 };
